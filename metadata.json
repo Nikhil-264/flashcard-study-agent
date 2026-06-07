@@ -1,0 +1,6 @@
+{
+  "name": "Engineering Flashcards & Quiz",
+  "description": "A rapid-fire, interactive technical exam preparation application with deep reasoning AI deconstructions of complex engineering concepts.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
