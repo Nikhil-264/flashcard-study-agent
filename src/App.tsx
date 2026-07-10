@@ -28,7 +28,8 @@ import {
   LogOut,
   UserCheck,
   Check,
-  FileCheck
+  FileCheck,
+  ExternalLink
 } from 'lucide-react';
 import { User } from 'firebase/auth';
 import { initAuth, googleSignIn, getAccessToken, logout, setAccessToken } from './auth';
@@ -169,6 +170,7 @@ export default function App() {
   const [accessToken, setAccessTokenState] = useState<string | null>(null);
   const [authChecking, setAuthChecking] = useState<boolean>(true);
   const [workspaceInfoMessage, setWorkspaceInfoMessage] = useState<string>('');
+  const [authError, setAuthError] = useState<{ message: string; isPopupBlocked: boolean } | null>(null);
 
   // Active Subject Cards Lists (To compile email lists or backing up)
   const [masteredList, setMasteredList] = useState<Flashcard[]>([]);
@@ -280,6 +282,7 @@ export default function App() {
   // Handle Sign In Action
   const handleGoogleSignIn = async () => {
     setAuthChecking(true);
+    setAuthError(null);
     try {
       const result = await googleSignIn();
       if (result) {
@@ -291,6 +294,13 @@ export default function App() {
       }
     } catch (err: any) {
       console.error('Google Sign In failed:', err);
+      const isPopup = err?.code === 'auth/popup-blocked' || 
+                      err?.message?.includes('popup-blocked') || 
+                      err?.message?.includes('popup');
+      setAuthError({
+        message: err?.message || 'Authentication failed.',
+        isPopupBlocked: isPopup
+      });
       setWorkspaceInfoMessage('OAuth failed. App remains perfectly functional in offline mode.');
     } finally {
       setAuthChecking(false);
@@ -303,6 +313,7 @@ export default function App() {
     setUser(null);
     setAccessTokenState(null);
     setDriveBackups([]);
+    setAuthError(null);
     setWorkspaceInfoMessage('Disconnected Google Workspace account.');
   };
 
@@ -600,7 +611,7 @@ export default function App() {
     } catch (err: any) {
       console.warn('API Evaluation failed, conducting manual local regex parsing for core formula strings.', err);
       // Fallback evaluation to ensure total platform dependability
-      const hasFormula = activeCard.formulaReference 
+      const hasFormula = activeCard?.formulaReference 
         ? userAnswer.toLowerCase().includes(activeCard.formulaReference.split('=')[0].trim().toLowerCase())
         : false;
       const score = hasFormula ? 80 : 40;
@@ -608,19 +619,21 @@ export default function App() {
       const simulatedEval: Evaluation = {
         score: score,
         correct: score >= 70,
-        technicalAccuracy: `[Sandbox Evaluation] Answer verified in offline sandbox. Analyzed keywords and formulas. You specified relevant identifiers in ${activeCard.topic}.`,
-        stepByStepBreakdown: `Concept Deconstruction:\n${activeCard.expectedAnswerSummary}\n\nMathematical Mechanics rely on: ${activeCard.formulaReference}. Make sure all dynamic fluid, thermal boundary, or molecular variables are quantified correctly.`,
+        technicalAccuracy: `[Sandbox Evaluation] Answer verified in offline sandbox. Analyzed keywords and formulas. You specified relevant identifiers in ${activeCard?.topic || 'this topic'}.`,
+        stepByStepBreakdown: `Concept Deconstruction:\n${activeCard?.expectedAnswerSummary || 'Review your answer against standard engineering resources.'}\n\nMathematical Mechanics rely on: ${activeCard?.formulaReference || 'Fundamental relations'}. Make sure all dynamic fluid, thermal boundary, or molecular variables are quantified correctly.`,
         commonPitfalls: `Ensure correct variable definitions, negative signs conservation, and exact physical dimensions.`,
-        keyTakeaway: `Familiarize with standard notation: ${activeCard.formulaReference}`
+        keyTakeaway: `Familiarize with standard notation: ${activeCard?.formulaReference || 'Fundamental relations'}`
       };
       setEvaluation(simulatedEval);
       
-      if (score >= 70) {
-        setMasteredList(p => [...p, activeCard]);
-        setMasteredCount(m => m + 1);
-      } else {
-        setReviewList(p => [...p, activeCard]);
-        setReviewCount(r => r + 1);
+      if (activeCard) {
+        if (score >= 70) {
+          setMasteredList(p => [...p, activeCard]);
+          setMasteredCount(m => m + 1);
+        } else {
+          setReviewList(p => [...p, activeCard]);
+          setReviewCount(r => r + 1);
+        }
       }
     } finally {
       setEvaluating(false);
@@ -756,6 +769,51 @@ export default function App() {
             <AlertCircle className="h-4 w-4 text-amber-600 shrink-0 mt-0.5" />
             <div className="flex-1">
               <p className="font-semibold font-mono">{apiError}</p>
+            </div>
+          </div>
+        )}
+
+        {/* Google Auth Popup Blocked Warning */}
+        {authError?.isPopupBlocked && (
+          <div id="auth_popup_blocked_warning" className="mb-6 bg-rose-50 border-2 border-rose-500 rounded-xl p-5 shadow-sm transition-all animate-fadeIn animate-duration-300">
+            <div className="flex items-start space-x-3.5">
+              <div className="p-2 bg-rose-100 text-rose-700 rounded-lg shrink-0 mt-0.5">
+                <AlertCircle className="h-5 w-5" />
+              </div>
+              <div className="flex-1">
+                <div className="flex items-center justify-between">
+                  <h4 className="text-xs md:text-sm font-bold text-rose-950 uppercase font-mono tracking-tight">
+                    Browser Popup Blocked (OAuth Constraint)
+                  </h4>
+                  <button 
+                    onClick={() => setAuthError(null)}
+                    className="text-rose-500 hover:text-rose-800 font-bold text-lg select-none focus:outline-none leading-none px-1.5 py-0.5 rounded hover:bg-rose-100/50 transition-all cursor-pointer"
+                    title="Dismiss warning"
+                  >
+                    ×
+                  </button>
+                </div>
+                <p className="text-xs text-rose-800 mt-1 font-sans leading-relaxed">
+                  To connect your Google Workspace (Gmail and Google Drive) securely, the application needs to open a Google Sign-In popup. However, because this application is running inside an <b>iframe preview</b>, your web browser blocked the popup.
+                </p>
+                
+                <div className="mt-4 flex flex-col sm:flex-row sm:items-center gap-3">
+                  {/* Native HTML link to open in new tab (guaranteed to bypass popup blocker on user click) */}
+                  <a 
+                    href={window.location.href} 
+                    target="_blank" 
+                    rel="noopener noreferrer"
+                    className="inline-flex items-center space-x-2 bg-slate-900 hover:bg-slate-800 text-white font-mono text-[11px] font-black px-4 py-2.5 rounded-lg shadow-xs transition-all active:scale-[0.98] w-fit"
+                  >
+                    <ExternalLink className="h-3.5 w-3.5 text-indigo-300" />
+                    <span>OPEN APP IN NEW TAB ↗</span>
+                  </a>
+                  
+                  <span className="text-[10px] text-rose-700/80 font-mono leading-tight max-w-md">
+                    <b>Alternative:</b> Click the popup-blocked icon in your browser's URL address bar (far right), choose <b>"Always allow popups..."</b>, and click "Connect" again.
+                  </span>
+                </div>
+              </div>
             </div>
           </div>
         )}
@@ -1167,7 +1225,7 @@ export default function App() {
                             <Lightbulb className="h-3.5 w-3.5 text-amber-600" />
                             <span>EXAM COMPILER HINTS:</span>
                           </div>
-                          {deck[currentCardIndex]?.tips.map((tp, idx) => (
+                          {deck[currentCardIndex]?.tips?.map((tp, idx) => (
                             <p key={idx} className="font-mono leading-relaxed pl-3.5 relative">
                               <span className="absolute left-1">•</span> {tp}
                             </p>
@@ -1359,75 +1417,81 @@ export default function App() {
                   ) : (
                     
                     /* AI Evaluation breakdown display */
-                    <div id="ai_evaluation_card" className="bg-white border-2 border-slate-900 rounded-2xl overflow-hidden shadow-sm animate-slideIn">
-                      
-                      {/* Evaluation Header */}
-                      <div className={`px-5 py-3.5 ${evaluation.correct ? 'bg-emerald-50 text-emerald-905 border-b border-emerald-150' : 'bg-rose-50 text-rose-905 border-b border-rose-150'} flex items-center justify-between`}>
-                        <div className="flex items-center space-x-2">
-                          {evaluation.correct ? (
-                            <CheckCircle2 className="h-5 w-5 text-emerald-600" />
-                          ) : (
-                            <XCircle className="h-5 w-5 text-rose-500" />
-                          )}
-                          <span className="text-xs font-bold uppercase tracking-wider">
-                            {evaluation.correct ? 'CONCEPT CLEAR' : 'CONCEPT UNDER REVISE'}
-                          </span>
-                        </div>
-                        
-                        <div className="flex items-center space-x-2 bg-white px-2.5 py-1 rounded-lg border border-slate-200 shadow-xs">
-                          <span className="text-[9px] text-slate-500 font-bold">SCORE</span>
-                          <span id="evaluation_score_ring" className={`text-xs font-black ${evaluation.score >= 70 ? 'text-emerald-600' : evaluation.score >= 40 ? 'text-amber-500' : 'text-rose-600'}`}>
-                            {evaluation.score}%
-                          </span>
-                        </div>
-                      </div>
-
-                      {/* Review details */}
-                      <div className="p-5 space-y-4 max-h-[580px] overflow-y-auto text-xs leading-relaxed font-mono">
-                        
-                        {/* Direct Critique */}
-                        <div id="critique_block">
-                          <span className="text-[9px] font-bold text-slate-450 block uppercase tracking-wider mb-1">TECHNICAL ACCURACY CRITIQUE</span>
-                          <p id="evaluation_critique_text" className="text-slate-800 bg-slate-50 border border-slate-201 p-3 rounded-lg text-[11px] whitespace-pre-line leading-relaxed">
-                            {evaluation.technicalAccuracy}
-                          </p>
-                        </div>
-
-                        {/* Step by Step Breakdown */}
-                        <div id="breakdown_block">
-                          <span className="text-[9px] font-bold text-indigo-600 block uppercase tracking-wider mb-1">DEEP PHYSICAL & MATH DECONSTRUCTION</span>
-                          <div id="evaluation_breakdown_text" className="bg-indigo-50/40 border border-indigo-100 p-3.5 rounded-lg text-slate-850 text-[11px] whitespace-pre-line space-y-2 leading-relaxed">
-                            {evaluation.stepByStepBreakdown}
+                    (() => {
+                      const evalResult = evaluation;
+                      if (!evalResult) return null;
+                      return (
+                        <div id="ai_evaluation_card" className="bg-white border-2 border-slate-900 rounded-2xl overflow-hidden shadow-sm animate-slideIn">
+                          
+                          {/* Evaluation Header */}
+                          <div className={`px-5 py-3.5 ${evalResult.correct ? 'bg-emerald-50 text-emerald-905 border-b border-emerald-150' : 'bg-rose-50 text-rose-905 border-b border-rose-150'} flex items-center justify-between`}>
+                            <div className="flex items-center space-x-2">
+                              {evalResult.correct ? (
+                                <CheckCircle2 className="h-5 w-5 text-emerald-600" />
+                              ) : (
+                                <XCircle className="h-5 w-5 text-rose-500" />
+                              )}
+                              <span className="text-xs font-bold uppercase tracking-wider">
+                                {evalResult.correct ? 'CONCEPT CLEAR' : 'CONCEPT UNDER REVISE'}
+                              </span>
+                            </div>
+                            
+                            <div className="flex items-center space-x-2 bg-white px-2.5 py-1 rounded-lg border border-slate-200 shadow-xs">
+                              <span className="text-[9px] text-slate-500 font-bold">SCORE</span>
+                              <span id="evaluation_score_ring" className={`text-xs font-black ${evalResult.score >= 70 ? 'text-emerald-600' : evalResult.score >= 40 ? 'text-amber-500' : 'text-rose-600'}`}>
+                                {evalResult.score}%
+                              </span>
+                            </div>
                           </div>
-                        </div>
 
-                        {/* Pitfalls */}
-                        <div id="pitfall_block">
-                          <span className="text-[9px] font-bold text-amber-705 block uppercase tracking-wider mb-1">EXAM PITFALL CHECKLIST</span>
-                          <p id="evaluation_pitfalls_text" className="text-amber-900 bg-amber-50/50 border border-amber-150 p-3 rounded-lg text-[11px] whitespace-pre-line leading-relaxed">
-                            {evaluation.commonPitfalls}
-                          </p>
-                        </div>
+                          {/* Review details */}
+                          <div className="p-5 space-y-4 max-h-[580px] overflow-y-auto text-xs leading-relaxed font-mono">
+                            
+                            {/* Direct Critique */}
+                            <div id="critique_block">
+                              <span className="text-[9px] font-bold text-slate-450 block uppercase tracking-wider mb-1">TECHNICAL ACCURACY CRITIQUE</span>
+                              <p id="evaluation_critique_text" className="text-slate-800 bg-slate-50 border border-slate-201 p-3 rounded-lg text-[11px] whitespace-pre-line leading-relaxed">
+                                {evalResult.technicalAccuracy}
+                              </p>
+                            </div>
 
-                        {/* Core takeaway */}
-                        <div id="takeaway_block" className="border-t border-slate-100 pt-3 flex items-start space-x-2">
-                          <span className="text-lg">💡</span>
-                          <div className="flex-1">
-                            <span className="text-[9px] font-bold text-slate-450 block uppercase tracking-wider">KEY DERIVATION TAKEAWAY</span>
-                            <p id="evaluation_takeaway_text" className="text-[11px] font-bold text-slate-800">
-                              {evaluation.keyTakeaway}
-                            </p>
+                            {/* Step by Step Breakdown */}
+                            <div id="breakdown_block">
+                              <span className="text-[9px] font-bold text-indigo-600 block uppercase tracking-wider mb-1">DEEP PHYSICAL & MATH DECONSTRUCTION</span>
+                              <div id="evaluation_breakdown_text" className="bg-indigo-50/40 border border-indigo-100 p-3.5 rounded-lg text-slate-850 text-[11px] whitespace-pre-line space-y-2 leading-relaxed">
+                                {evalResult.stepByStepBreakdown}
+                              </div>
+                            </div>
+
+                            {/* Pitfalls */}
+                            <div id="pitfall_block">
+                              <span className="text-[9px] font-bold text-amber-705 block uppercase tracking-wider mb-1">EXAM PITFALL CHECKLIST</span>
+                              <p id="evaluation_pitfalls_text" className="text-amber-900 bg-amber-50/50 border border-amber-150 p-3 rounded-lg text-[11px] whitespace-pre-line leading-relaxed">
+                                {evalResult.commonPitfalls}
+                              </p>
+                            </div>
+
+                            {/* Core takeaway */}
+                            <div id="takeaway_block" className="border-t border-slate-100 pt-3 flex items-start space-x-2">
+                              <span className="text-lg">💡</span>
+                              <div className="flex-1">
+                                <span className="text-[9px] font-bold text-slate-450 block uppercase tracking-wider">KEY DERIVATION TAKEAWAY</span>
+                                <p id="evaluation_takeaway_text" className="text-[11px] font-bold text-slate-800">
+                                  {evalResult.keyTakeaway}
+                                </p>
+                              </div>
+                            </div>
+
+                            {/* Keyboard action hint */}
+                            <div className="bg-slate-900 text-slate-200 p-2 rounded text-center text-[9px] uppercase font-bold tracking-wider">
+                              Press Space or click Submit to advance cards
+                            </div>
+
                           </div>
+
                         </div>
-
-                        {/* Keyboard action hint */}
-                        <div className="bg-slate-900 text-slate-200 p-2 rounded text-center text-[9px] uppercase font-bold tracking-wider">
-                          Press Space or click Submit to advance cards
-                        </div>
-
-                      </div>
-
-                    </div>
+                      );
+                    })()
                   )}
 
                 </div>

@@ -31,6 +31,60 @@ function getGemini(): GoogleGenAI {
   return aiClient;
 }
 
+// Robust helper to retry on temporary/demand errors (like 503/429) and fall back to alternative models if needed
+async function generateContentWithFallback(
+  contents: any,
+  config: any
+): Promise<any> {
+  const modelsToTry = ['gemini-3.5-flash', 'gemini-flash-latest', 'gemini-3.1-flash-lite'];
+  let lastError: any = null;
+
+  for (const modelName of modelsToTry) {
+    let retries = 2;
+    let delay = 800;
+    while (retries >= 0) {
+      try {
+        const ai = getGemini();
+        console.log(`Attempting Gemini generation with model: ${modelName} (${retries} retries remaining)`);
+        const response = await ai.models.generateContent({
+          model: modelName,
+          contents,
+          config,
+        });
+        return response;
+      } catch (error: any) {
+        lastError = error;
+        const errMsg = error?.message || (typeof error === 'string' ? error : JSON.stringify(error)) || '';
+        const errStatus = error?.status || error?.code || 0;
+        const isTemporary = errStatus === 503 || 
+                            errStatus === 429 ||
+                            errMsg.includes('503') || 
+                            errMsg.includes('429') || 
+                            errMsg.includes('temporary') || 
+                            errMsg.includes('demand') || 
+                            errMsg.includes('UNAVAILABLE') ||
+                            errMsg.includes('Resource has been exhausted');
+        
+        if (isTemporary && retries > 0) {
+          // If it's a 503 / high demand error, switch immediately to the next model to avoid delaying the user with retries
+          if (errStatus === 503 || errMsg.includes('503') || errMsg.includes('demand') || errMsg.includes('UNAVAILABLE')) {
+            console.warn(`Gemini API 503 high-demand hit for model ${modelName}. Rotating to fallback model immediately.`);
+            break; 
+          }
+          console.warn(`Gemini API temporary error with model ${modelName}: ${errMsg}. Retrying in ${delay}ms...`);
+          await new Promise((resolve) => setTimeout(resolve, delay));
+          retries--;
+          delay *= 1.5;
+        } else {
+          console.warn(`Gemini API failed or non-retryable error with model ${modelName}: ${errMsg}. Moving on...`);
+          break; // move to next model
+        }
+      }
+    }
+  }
+  throw lastError || new Error('All attempt models failed to generate content.');
+}
+
 // 1. API route to generate 5 engineering flashcards
 app.post('/api/flashcards/generate', async (req, res) => {
   try {
@@ -54,32 +108,28 @@ The audience is engineering students preparing for rigorous board/professional e
 Make sure questions are clear, with professional terminology and specific notation (such as LaTeX style if needed, e.g., ∂T/∂P or dH = TdS + VdP).
 `;
 
-    const response = await ai.models.generateContent({
-      model: 'gemini-3.5-flash',
-      contents: prompt,
-      config: {
-        systemInstruction: "You are a distinguished engineering professor and chairman of a professional licensing board. You compile intense conceptual or numerical exam questions in fields like Chemical, Mechanical, Civil, Electrical, Aerospace, or Materials Engineering. You respond strictly with a valid JSON array matching the provided schema.",
-        responseMimeType: 'application/json',
-        responseSchema: {
-          type: 'ARRAY' as any,
-          items: {
-            type: 'OBJECT' as any,
-            properties: {
-              id: { type: 'STRING' as any, description: 'Short unique identifier (e.g., fc_1)' },
-              subject: { type: 'STRING' as any, description: 'The engineering subject area' },
-              topic: { type: 'STRING' as any, description: 'The specific subtopic, e.g., Joule-Thomson effect, Maxwell equations' },
-              question: { type: 'STRING' as any, description: 'Clear, rigorous technical question or problem statement.' },
-              expectedAnswerSummary: { type: 'STRING' as any, description: 'The complete, precise correct answer including formula, assumptions, and mechanical definition.' },
-              tips: {
-                type: 'ARRAY' as any,
-                items: { type: 'STRING' as any },
-                description: '2-3 conceptual hints, core assumptions, or unit checks to help solve it.'
-              },
-              difficulty: { type: 'STRING' as any, description: 'Difficulty level (Fundamental, Intermediate, Advanced)' },
-              formulaReference: { type: 'STRING' as any, description: 'Key equation or relation name, e.g., dG = VdP - SdT' }
+    const response = await generateContentWithFallback(prompt, {
+      systemInstruction: "You are a distinguished engineering professor and chairman of a professional licensing board. You compile intense conceptual or numerical exam questions in fields like Chemical, Mechanical, Civil, Electrical, Aerospace, or Materials Engineering. You respond strictly with a valid JSON array matching the provided schema.",
+      responseMimeType: 'application/json',
+      responseSchema: {
+        type: 'ARRAY' as any,
+        items: {
+          type: 'OBJECT' as any,
+          properties: {
+            id: { type: 'STRING' as any, description: 'Short unique identifier (e.g., fc_1)' },
+            subject: { type: 'STRING' as any, description: 'The engineering subject area' },
+            topic: { type: 'STRING' as any, description: 'The specific subtopic, e.g., Joule-Thomson effect, Maxwell equations' },
+            question: { type: 'STRING' as any, description: 'Clear, rigorous technical question or problem statement.' },
+            expectedAnswerSummary: { type: 'STRING' as any, description: 'The complete, precise correct answer including formula, assumptions, and mechanical definition.' },
+            tips: {
+              type: 'ARRAY' as any,
+              items: { type: 'STRING' as any },
+              description: '2-3 conceptual hints, core assumptions, or unit checks to help solve it.'
             },
-            required: ['id', 'subject', 'topic', 'question', 'expectedAnswerSummary', 'tips', 'difficulty', 'formulaReference']
-          }
+            difficulty: { type: 'STRING' as any, description: 'Difficulty level (Fundamental, Intermediate, Advanced)' },
+            formulaReference: { type: 'STRING' as any, description: 'Key equation or relation name, e.g., dG = VdP - SdT' }
+          },
+          required: ['id', 'subject', 'topic', 'question', 'expectedAnswerSummary', 'tips', 'difficulty', 'formulaReference']
         }
       }
     });
@@ -129,24 +179,20 @@ Conduct a high-thinking engineering assessment.
 5. State an elegant "keyTakeaway" for exam day.
 `;
 
-    const response = await ai.models.generateContent({
-      model: 'gemini-3.5-flash',
-      contents: prompt,
-      config: {
-        systemInstruction: "You are an encouraging and pedantic academic engineering evaluator. You analyze STEM explanations, derivations, and calculations. You highlight and deconstruct common conceptual pitfalls and mathematical errors. You format your output strictly as a JSON object matching the schema.",
-        responseMimeType: 'application/json',
-        responseSchema: {
-          type: 'OBJECT' as any,
-          properties: {
-            score: { type: 'INTEGER' as any, description: 'Evaluation score out of 100.' },
-            correct: { type: 'BOOLEAN' as any, description: 'Fundamentally correct (usually score >= 70).' },
-            technicalAccuracy: { type: 'STRING' as any, description: 'Clear critique of their answer, explaining what is correct or missing.' },
-            stepByStepBreakdown: { type: 'STRING' as any, description: 'An educational, step-by-step scientific/mathematical derivation and logical overview.' },
-            commonPitfalls: { type: 'STRING' as any, description: 'Standard errors or assumptions that students trip over on this type of question.' },
-            keyTakeaway: { type: 'STRING' as any, description: 'One clear, concise sentence to remember for the exam.' }
-          },
-          required: ['score', 'correct', 'technicalAccuracy', 'stepByStepBreakdown', 'commonPitfalls', 'keyTakeaway']
-        }
+    const response = await generateContentWithFallback(prompt, {
+      systemInstruction: "You are an encouraging and pedantic academic engineering evaluator. You analyze STEM explanations, derivations, and calculations. You highlight and deconstruct common conceptual pitfalls and mathematical errors. You format your output strictly as a JSON object matching the schema.",
+      responseMimeType: 'application/json',
+      responseSchema: {
+        type: 'OBJECT' as any,
+        properties: {
+          score: { type: 'INTEGER' as any, description: 'Evaluation score out of 100.' },
+          correct: { type: 'BOOLEAN' as any, description: 'Fundamentally correct (usually score >= 70).' },
+          technicalAccuracy: { type: 'STRING' as any, description: 'Clear critique of their answer, explaining what is correct or missing.' },
+          stepByStepBreakdown: { type: 'STRING' as any, description: 'An educational, step-by-step scientific/mathematical derivation and logical overview.' },
+          commonPitfalls: { type: 'STRING' as any, description: 'Standard errors or assumptions that students trip over on this type of question.' },
+          keyTakeaway: { type: 'STRING' as any, description: 'One clear, concise sentence to remember for the exam.' }
+        },
+        required: ['score', 'correct', 'technicalAccuracy', 'stepByStepBreakdown', 'commonPitfalls', 'keyTakeaway']
       }
     });
 
